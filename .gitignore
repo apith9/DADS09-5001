@@ -1,0 +1,31 @@
+# Secrets — NEVER commit real credentials (required for public Streamlit deploy)
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml
+!.streamlit/secrets.toml.example
+*.pem
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+.env.*
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Streamlit
+.streamlit/cache/
+
+# Data exports
+*.csv
+!sample_data/

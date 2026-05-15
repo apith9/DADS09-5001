@@ -1,0 +1,10 @@
+[theme]
+primaryColor = "#FF385C"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#111827"
+font = "sans serif"
+
+[server]
+# Do not enable unsafe debug endpoints in production
+enableXsrfProtection = true

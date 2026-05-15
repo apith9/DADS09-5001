@@ -1,5 +1,6 @@
 """
 Data cleaning, filtering, and insight generation for Airbnb listings.
+Supports multiple MongoDB / CSV field naming conventions.
 """
 
 from typing import Optional
@@ -7,9 +8,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-
-# Canonical column names used across the dashboard
-REQUIRED_COLUMNS = [
+# Standard dashboard columns
+STANDARD_COLUMNS = [
     "name",
     "country",
     "property_type",
@@ -21,6 +21,81 @@ REQUIRED_COLUMNS = [
     "host_id",
 ]
 
+# Map standard name -> possible source column names (after json_normalize)
+COLUMN_ALIASES: dict[str, list[str]] = {
+    "name": ["name", "listing_name", "title", "NAME"],
+    "country": [
+        "country",
+        "Country",
+        "country_code",
+        "address_country",
+        "address.country",
+        "country_name",
+    ],
+    "property_type": [
+        "property_type",
+        "propertyType",
+        "property_type_group",
+        "PROPERTY_TYPE",
+    ],
+    "room_type": ["room_type", "roomType", "ROOM_TYPE"],
+    "price": ["price", "Price", "nightly_price", "price_night", "weekly_price"],
+    "review_scores_rating": [
+        "review_scores_rating",
+        "review_scores.rating",
+        "review_scores_rating",
+        "reviews_rating",
+        "review_scores_review_scores_rating",
+        "rating",
+    ],
+    "latitude": ["latitude", "lat", "geo_lat", "location_lat", "coordinates_1"],
+    "longitude": ["longitude", "lon", "lng", "geo_lng", "location_lon", "coordinates_0"],
+    "host_id": ["host_id", "host.id", "host_id_host_id", "host_host_id"],
+    "city": ["city", "address_city", "address.city", "City"],
+    "neighbourhood": [
+        "neighbourhood",
+        "neighborhood",
+        "neighbourhood_cleansed",
+        "address_neighbourhood",
+    ],
+}
+
+
+def _find_source_column(df: pd.DataFrame, aliases: list[str]) -> Optional[str]:
+    """Return the first matching column name in the dataframe."""
+    columns_lower = {c.lower(): c for c in df.columns}
+    for alias in aliases:
+        if alias in df.columns:
+            return alias
+        if alias.lower() in columns_lower:
+            return columns_lower[alias.lower()]
+    return None
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rename varied Airbnb / MongoDB fields to standard dashboard column names.
+    Missing columns are created as NA (no KeyError).
+    """
+    if df.empty:
+        return df
+
+    out = df.copy()
+
+    for standard, aliases in COLUMN_ALIASES.items():
+        if standard in out.columns:
+            continue
+        source = _find_source_column(out, aliases)
+        if source is not None:
+            out[standard] = out[source]
+
+    # Ensure all standard columns exist
+    for col in STANDARD_COLUMNS:
+        if col not in out.columns:
+            out[col] = np.nan
+
+    return out
+
 
 def clean_listings(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -29,7 +104,7 @@ def clean_listings(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    out = df.copy()
+    out = normalize_columns(df)
 
     # Normalize string columns
     for col in ["country", "property_type", "room_type", "name"]:
@@ -65,18 +140,17 @@ def clean_listings(df: pd.DataFrame) -> pd.DataFrame:
 
     # Location label for maps / top locations
     if "neighbourhood" in out.columns or "city" in out.columns:
-        nb = out.get("neighbourhood", pd.Series([""] * len(out)))
-        ct = out.get("city", pd.Series([""] * len(out)))
+        nb = out["neighbourhood"] if "neighbourhood" in out.columns else pd.Series([""] * len(out))
+        ct = out["city"] if "city" in out.columns else pd.Series([""] * len(out))
         out["location"] = (
-            nb.fillna("").astype(str)
-            + ", "
-            + ct.fillna("").astype(str)
+            nb.fillna("").astype(str) + ", " + ct.fillna("").astype(str)
         ).str.strip(", ").replace("", np.nan)
     elif "country" in out.columns:
         out["location"] = out["country"]
 
-    # Drop rows without usable price for price-based charts (keep for counts if needed)
-    out = out.dropna(subset=["country"], how="all")
+    # Drop rows with no country only when country column has values
+    if "country" in out.columns and out["country"].notna().any():
+        out = out.dropna(subset=["country"], how="all")
 
     return out
 
@@ -140,17 +214,15 @@ def compute_kpis(df: pd.DataFrame) -> dict[str, float | int | str]:
 def generate_insights(df: pd.DataFrame) -> list[str]:
     """
     Auto-generate human-readable insights from the current filtered data.
-    AI-style narrative summaries for the insights panel.
     """
     insights: list[str] = []
 
     if df.empty:
         return ["No data available for the selected filters. Adjust filters to see insights."]
 
-    # Highest average price by country
     if "country" in df.columns and "price" in df.columns:
         country_price = (
-            df.dropna(subset=["price"])
+            df.dropna(subset=["price", "country"])
             .groupby("country")["price"]
             .mean()
             .sort_values(ascending=False)
@@ -163,7 +235,6 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
                 f"at **${top_price:,.2f}** per night (among filtered listings)."
             )
 
-    # Most common room type
     if "room_type" in df.columns:
         room_counts = df["room_type"].value_counts()
         if not room_counts.empty:
@@ -174,7 +245,6 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
                 f"({pct:.1f}% of filtered listings)."
             )
 
-    # Price vs review correlation trend
     if "price" in df.columns and "review_scores_rating" in df.columns:
         subset = df[["price", "review_scores_rating"]].dropna()
         if len(subset) > 10:
@@ -195,7 +265,6 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
                     f"(≈ {corr:.2f}) in the current selection."
                 )
 
-    # Geographic spread
     if "country" in df.columns:
         n_countries = df["country"].nunique()
         insights.append(
@@ -203,7 +272,6 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
             f"{'country' if n_countries == 1 else 'countries'}."
         )
 
-    # Expensive locations
     if "location" in df.columns and "price" in df.columns:
         loc_price = (
             df.dropna(subset=["location", "price"])
@@ -218,7 +286,6 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
                 f"**{loc_price.index[2]}** by average nightly rate."
             )
 
-    # Listing volume
     if "property_type" in df.columns:
         prop_counts = df["property_type"].value_counts()
         if not prop_counts.empty:
@@ -226,6 +293,12 @@ def generate_insights(df: pd.DataFrame) -> list[str]:
                 f"**{prop_counts.index[0]}** is the dominant property type "
                 f"with {prop_counts.iloc[0]:,} listings."
             )
+
+    if not insights:
+        insights.append(
+            "Data loaded successfully. Map field names in MongoDB to "
+            "`country`, `price`, `room_type`, etc. for richer insights."
+        )
 
     return insights
 
@@ -235,7 +308,9 @@ def get_filter_options(df: pd.DataFrame) -> dict[str, list]:
     def _unique(col: str) -> list:
         if col not in df.columns:
             return []
-        return sorted(df[col].dropna().astype(str).unique().tolist())
+        vals = df[col].dropna().astype(str)
+        vals = vals[~vals.isin(["nan", "None", ""])]
+        return sorted(vals.unique().tolist())
 
     prices = df["price"].dropna() if "price" in df.columns else pd.Series([0, 500])
     pmin = float(prices.min()) if len(prices) else 0.0

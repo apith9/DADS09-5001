@@ -97,24 +97,36 @@ def render_sidebar_filters(options: dict) -> dict:
     """
     st.sidebar.header("🔍 Filters")
 
-    countries = st.sidebar.multiselect(
-        "Country",
-        options=options["countries"],
-        default=options["countries"],
-        help="Select one or more countries",
-    )
+    if options["countries"]:
+        countries = st.sidebar.multiselect(
+            "Country",
+            options=options["countries"],
+            default=options["countries"],
+            help="Select one or more countries",
+        )
+    else:
+        countries = []
+        st.sidebar.caption("Country filter unavailable (no country field in data).")
 
-    property_types = st.sidebar.multiselect(
-        "Property Type",
-        options=options["property_types"],
-        default=options["property_types"],
-    )
+    if options["property_types"]:
+        property_types = st.sidebar.multiselect(
+            "Property Type",
+            options=options["property_types"],
+            default=options["property_types"],
+        )
+    else:
+        property_types = []
+        st.sidebar.caption("Property type filter unavailable.")
 
-    room_types = st.sidebar.multiselect(
-        "Room Type",
-        options=options["room_types"],
-        default=options["room_types"],
-    )
+    if options["room_types"]:
+        room_types = st.sidebar.multiselect(
+            "Room Type",
+            options=options["room_types"],
+            default=options["room_types"],
+        )
+    else:
+        room_types = []
+        st.sidebar.caption("Room type filter unavailable.")
 
     price_min = options["price_min"]
     price_max = options["price_max"]
@@ -306,6 +318,14 @@ def main() -> None:
         st.stop()
 
     df = clean_listings(raw_df)
+
+    with st.expander("📎 Loaded data columns (from MongoDB)", expanded=False):
+        st.caption(
+            f"{len(raw_df):,} rows · Fields are auto-mapped to dashboard names "
+            f"(`country`, `price`, `room_type`, …)."
+        )
+        st.write(list(df.columns))
+
     options = get_filter_options(df)
     filters = render_sidebar_filters(options)
 

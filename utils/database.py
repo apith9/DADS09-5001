@@ -4,7 +4,9 @@ Credentials are loaded ONLY from st.secrets — never hardcode passwords.
 """
 
 from typing import Any, Optional
+from urllib.parse import quote_plus
 
+import certifi
 import pandas as pd
 import streamlit as st
 from pymongo import MongoClient
@@ -46,20 +48,25 @@ def _build_client() -> MongoClient:
 
     method = get_connection_method()
 
+    client_kwargs = {
+        "serverSelectionTimeoutMS": 15000,
+        "tlsCAFile": certifi.where(),  # fixes SSL on macOS / some cloud runtimes
+    }
+
     if method == "mongo_uri":
         uri = _get_secret("MONGO_URI")
-        return MongoClient(uri, serverSelectionTimeoutMS=10000)
+        return MongoClient(uri, **client_kwargs)
 
     # split_credentials (recommended for Streamlit Community Cloud)
-    username = _get_secret("MONGO_USERNAME")
-    password = _get_secret("MONGO_PASSWORD")
+    username = quote_plus(_get_secret("MONGO_USERNAME"))
+    password = quote_plus(_get_secret("MONGO_PASSWORD"))
     cluster = _get_secret("MONGO_CLUSTER")
     db_name = _get_secret("MONGO_DB", "airbnb")
     uri = (
         f"mongodb+srv://{username}:{password}@{cluster}/"
         f"{db_name}?retryWrites=true&w=majority"
     )
-    return MongoClient(uri, serverSelectionTimeoutMS=10000)
+    return MongoClient(uri, **client_kwargs)
 
 
 @st.cache_resource(show_spinner="Connecting to MongoDB Atlas...")
@@ -93,23 +100,8 @@ def load_listings_data(
     """
     collection = get_collection()
 
-    default_projection = {
-        "_id": 0,
-        "name": 1,
-        "country": 1,
-        "property_type": 1,
-        "room_type": 1,
-        "price": 1,
-        "review_scores_rating": 1,
-        "latitude": 1,
-        "longitude": 1,
-        "host_id": 1,
-        "neighbourhood": 1,
-        "city": 1,
-    }
-    proj = projection or default_projection
-
-    cursor = collection.find({}, proj)
+    # Load full documents so we can map varied Airbnb / Atlas field names
+    cursor = collection.find({}, projection)
     if limit > 0:
         cursor = cursor.limit(limit)
 
@@ -117,7 +109,11 @@ def load_listings_data(
     if not records:
         return pd.DataFrame()
 
-    return pd.DataFrame(records)
+    # Flatten nested fields (e.g. address.country, review_scores.rating)
+    df = pd.json_normalize(records, sep="_")
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"], errors="ignore")
+    return df
 
 
 def test_connection() -> tuple[bool, str]:
